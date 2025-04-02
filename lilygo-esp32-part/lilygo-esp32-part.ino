@@ -57,6 +57,11 @@ void setup() {
   Serial.println();
   Serial.print("Connected to WiFi, IP address: ");
   Serial.println(WiFi.localIP());
+  tft.setTextSize(2);
+  tft.setTextColor(ST77XX_BLACK);
+  tft.setCursor(0, 40);
+  tft.print("Dongle IP:");
+  tft.println(WiFi.localIP());
 
   // ----- Web Server Routes -----
   server.on("/", handleRoot);    // Handle root page

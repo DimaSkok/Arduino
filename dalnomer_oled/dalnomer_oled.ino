@@ -1,18 +1,37 @@
 #include <Wire.h>
+
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <MPU6050.h> // Библиотека для GY-521
 #include <math.h>
+#include <RH_ASK.h>
+#include <SPI.h>
+#include <RTClib.h>
 
-#define SCREEN_WIDTH 128 // Ширина OLED экрана, в пикселях
-#define SCREEN_HEIGHT 64  // Высота OLED экрана, в пикселях
+#define SCREEN_WIDTH1 128 // Ширина OLED экрана, в пикселях
+#define SCREEN_HEIGHT1 64  // Высота OLED экрана, в пикселях
+#define SCREEN_WIDTH2 128 // Ширина OLED экрана, в пикселях
+#define SCREEN_HEIGHT2 32
 #define OLED_RESET    -1  // Пин сброса (используется -1, если не подключен)
 #define TRIGGER_PIN   9  // Пин TRIGGER для HC-SR04
 #define ECHO_PIN      10 // Пин ECHO для HC-SR04
 #define LAZER 2
 
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+Adafruit_SSD1306 display1(SCREEN_WIDTH1, SCREEN_HEIGHT1, &Wire, OLED_RESET);
+Adafruit_SSD1306 display2(SCREEN_WIDTH2, SCREEN_HEIGHT2, &Wire, OLED_RESET);
 MPU6050 mpu;
+RH_ASK driver;
+RTC_DS1307 rtc;
+
+char daysOfTheWeek[7][12] = {
+  "Su",
+  "Mo",
+  "Tu",
+  "We",
+  "Th",
+  "Fr",
+  "Sa"
+};
 
 int16_t ax, ay, az;
 int16_t gx, gy, gz;
@@ -21,8 +40,8 @@ long duration;
 int distance;
 
 // Центр экрана
-const int ORIGIN_X = SCREEN_WIDTH / 2 - 30;
-const int ORIGIN_Y = SCREEN_HEIGHT / 2 + 15;
+const int ORIGIN_X = SCREEN_WIDTH1 / 2 + 30;
+const int ORIGIN_Y = SCREEN_HEIGHT1 / 2 + 15;
 
 // Размер осей
 const int AXIS_LENGTH = 20; // Длина оси (в пикселях)
@@ -105,35 +124,64 @@ void draw3DCross(float roll, float pitch, float yaw) {
   int y3_2d = ORIGIN_Y - y3r3;
 
   // Рисуем оси
-  display.drawLine(ORIGIN_X, ORIGIN_Y, x1_2d, y1_2d, WHITE); // X
-  display.drawLine(ORIGIN_X, ORIGIN_Y, x2_2d, y2_2d, WHITE); // Y
-  display.drawLine(ORIGIN_X, ORIGIN_Y, x3_2d, y3_2d, WHITE); // Z
+  display1.drawLine(ORIGIN_X, ORIGIN_Y, x1_2d, y1_2d, WHITE); // X
+  display1.drawLine(ORIGIN_X, ORIGIN_Y, x2_2d, y2_2d, WHITE); // Y
+  display1.drawLine(ORIGIN_X, ORIGIN_Y, x3_2d, y3_2d, WHITE); // Z
 
     // Optional: Draw Labels
-    display.setTextSize(1);
-    display.setCursor(x1_2d, y1_2d);
-    display.print("X");
-    display.setCursor(x2_2d, y2_2d);
-    display.print("Y");
-    display.setCursor(x3_2d, y3_2d);
-    display.print("Z");
+    display1.setTextSize(1);
+    display1.setCursor(x1_2d, y1_2d);
+    display1.print("X");
+    display1.setCursor(x2_2d, y2_2d);
+    display1.print("Y");
+    display1.setCursor(x3_2d, y3_2d);
+    display1.print("Z");
 }
 
-void setup() {
-  Serial.begin(115200); // Увеличил скорость Serial
+const char* Key_rad = "2EP&H&JVJE";
 
-  // Инициализация OLED экрана
-  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Адрес 0x3D для некоторых экранов
+void setup() {
+  Serial.begin(115200); 
+
+  if(!display1.begin(SSD1306_SWITCHCAPVCC, 0x3D)) { // Адрес 0x3D для некоторых экранов
     Serial.println(F("SSD1306 allocation failed"));
     for(;;);
   }
+  delay(100);
 
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(WHITE);
-  display.setCursor(0,0);
-  display.println("Initializing...");
-  display.display();
+  if (!driver.init()){
+    Serial.println("init failed");
+  }
+  
+  display1.clearDisplay();
+  display1.setTextSize(1);
+  display1.setTextColor(WHITE);
+  display1.setCursor(0,0);
+  display1.println("Initializing...");
+  display1.display();
+
+  if (! rtc.begin()) {
+    Serial.println("Couldn't find RTC");
+    Serial.flush();
+    while (1);
+  }
+
+
+  if(!display2.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Адрес 0x3D для некоторых экранов
+    Serial.println(F("SSD1306 allocation failed"));
+    for(;;);
+  }
+  delay(100);
+
+  display2.clearDisplay();
+  display2.setTextSize(1);
+  display2.setTextColor(WHITE);
+  display2.setCursor(0,0);
+  display2.println("Initializing...");
+  display2.display();
+  
+  // automatically sets the RTC to the date & time on PC this sketch was compiled
+  rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
 
   // Инициализация MPU6050
   Wire.begin();
@@ -147,6 +195,8 @@ void setup() {
   pinMode(ECHO_PIN, INPUT);
 
   pinMode(LAZER, OUTPUT);
+
+  
 
   delay(2000); // Подождать после инициализации
 }
@@ -170,20 +220,53 @@ void loop() {
   // Использование библиотечной функции для преобразования "сырых" значений в угловую скорость
   // Замените gx, gy, gz на результат расчётов из библиотеки.
   // Используйте библиотеку MPU6050 или похожую, для корректного преобразования "сырых" данных
-  angleX = float(sin(double(ay)/32768)) * float(cos(double(ax)/32768));  // Roll - поворот вокруг оси X
-  angleY = float(sin(double(ay)/32768)) * float(sin(double(ax)/32768));  // Pitch - поворот вокруг оси Y
-  angleZ = float(cos(double(ay)/32768));  // Yaw - поворот вокруг оси Z
+  angleX = float(sin(double(ay)/32768*3.14)) * float(cos(double(ax)/32768*3.14));  // Roll - поворот вокруг оси X
+  angleY = float(sin(double(ay)/32768*3.14)) * float(sin(double(ax)/32768*3.14));  // Pitch - поворот вокруг оси Y
+  angleZ = float(cos(double(ay)/32768*3.14));  // Yaw - поворот вокруг оси Z
+
+  // Вывод данных на OLED экраны
+
+  DateTime now = rtc.now();
 
   // Вывод данных на OLED экран
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(WHITE);
-  display.setCursor(0,0);
+  display2.clearDisplay();
+  display2.setTextSize(2);
+  display2.setTextColor(WHITE);
+  display2.setCursor(0,0);
 
-  display.print("Distance: ");
-  display.print(distance);
-  display.println(" cm");
+  display2.print(now.hour(), DEC);
+  display2.print(':');
+  display2.print(now.minute(), DEC);
+  display2.print(':');
+  display2.print(now.second(), DEC);
+  display2.print('|');
+  display2.println(daysOfTheWeek[now.dayOfTheWeek()][0]);
+  
+  display2.print(now.day(), DEC);
+  display2.print('/');
+  display2.print(now.month(), DEC);
+  display2.print('/');
+  display2.print(now.year(), DEC);
+  display2.print('|');
+  display2.println(daysOfTheWeek[now.dayOfTheWeek()][1]);
 
+  
+  display2.display();
+
+
+  display1.clearDisplay();
+  display1.setTextSize(1);
+  display1.setTextColor(WHITE);
+  display1.setCursor(0,0);
+
+  display1.print("Distance: ");
+  display1.print(distance);
+  display1.println(" cm");
+  draw3DCross(angleX, angleY, angleZ);
+
+  display1.display();
+
+/*
   display.print("X=");
   display.print(float(ax)/32768);
   display.print(" ");
@@ -192,11 +275,10 @@ void loop() {
   display.print(float(ay)/32768);
   display.print(" ");
   display.println(float(gy)/32768);
-
+*/
   // Рисуем 3D-крестовину
-  draw3DCross(angleX, angleY, angleZ);
+  
 
-  display.display();
   digitalWrite(LAZER, LOW);
   delay(250); // Задержка между измерениями
   digitalWrite(LAZER, HIGH);

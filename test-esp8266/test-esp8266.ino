@@ -11,7 +11,7 @@
 // U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* clock=*/ SCL, /* data=*/ SDA, /* reset=*/ U8X8_PIN_NONE);   // РАБОТАЕТ
 
 // Инициализация дисплея для I2C, по умолчанию D1=SCL, D2=SDA
-U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* clock=*/ 5, /* data=*/ 6, /* reset=*/ U8X8_PIN_NONE);   // РАБОТАЕТ  (D1 = 5, D2 = 6)
+U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* clock=*/ 14, /* data=*/ 12, /* reset=*/ U8X8_PIN_NONE);   // РАБОТАЕТ  (D1 = 5, D2 = 6)
 
 
 void setup() {
