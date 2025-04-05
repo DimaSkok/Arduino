@@ -4,8 +4,6 @@
 #include <Adafruit_SSD1306.h>
 #include <MPU6050.h> // Библиотека для GY-521
 #include <math.h>
-#include <RH_ASK.h>
-#include <SPI.h>
 #include <RTClib.h>
 
 #define SCREEN_WIDTH1 128 // Ширина OLED экрана, в пикселях
@@ -16,11 +14,11 @@
 #define TRIGGER_PIN   9  // Пин TRIGGER для HC-SR04
 #define ECHO_PIN      10 // Пин ECHO для HC-SR04
 #define LAZER 2
+#define MPU6050_ADDR 0x69
 
-Adafruit_SSD1306 display1(SCREEN_WIDTH1, SCREEN_HEIGHT1, &Wire, OLED_RESET);
 Adafruit_SSD1306 display2(SCREEN_WIDTH2, SCREEN_HEIGHT2, &Wire, OLED_RESET);
-MPU6050 mpu;
-RH_ASK driver;
+Adafruit_SSD1306 display1(SCREEN_WIDTH1, SCREEN_HEIGHT1, &Wire, OLED_RESET);
+MPU6050 mpu(MPU6050_ADDR);
 RTC_DS1307 rtc;
 
 char daysOfTheWeek[7][12] = {
@@ -143,35 +141,17 @@ const char* Key_rad = "2EP&H&JVJE";
 void setup() {
   Serial.begin(115200); 
 
-  if(!display1.begin(SSD1306_SWITCHCAPVCC, 0x3D)) { // Адрес 0x3D для некоторых экранов
-    Serial.println(F("SSD1306 allocation failed"));
-    for(;;);
-  }
-  delay(100);
-
-  if (!driver.init()){
-    Serial.println("init failed");
-  }
-  
-  display1.clearDisplay();
-  display1.setTextSize(1);
-  display1.setTextColor(WHITE);
-  display1.setCursor(0,0);
-  display1.println("Initializing...");
-  display1.display();
-
-  if (! rtc.begin()) {
-    Serial.println("Couldn't find RTC");
-    Serial.flush();
-    while (1);
-  }
+  // Инициализация MPU6050
+  Wire.begin();
+  mpu.initialize(); 
+  Serial.println(mpu.testConnection() ? "MPU6050 OK" : "MPU6050 fail");
 
 
   if(!display2.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Адрес 0x3D для некоторых экранов
-    Serial.println(F("SSD1306 allocation failed"));
+    Serial.println(F("SSD1306 2 allocation failed"));
     for(;;);
   }
-  delay(100);
+  delay(1000);
 
   display2.clearDisplay();
   display2.setTextSize(1);
@@ -179,16 +159,29 @@ void setup() {
   display2.setCursor(0,0);
   display2.println("Initializing...");
   display2.display();
+
+  if (! rtc.begin()) {
+    Serial.println("Couldn't find RTC");
+    Serial.flush();
+    while (1);
+  }
+
+  if(!display1.begin(SSD1306_SWITCHCAPVCC, 0x3D)) { 
+    Serial.println(F("SSD1306 1 allocation failed"));
+    for(;;);
+  }
+
+  delay(1000);
+
+  display1.clearDisplay();
+  display1.setTextSize(1);
+  display1.setTextColor(WHITE);
+  display1.setCursor(0,0);
+  display1.println("Initializing...");
+  display1.display();
   
   // automatically sets the RTC to the date & time on PC this sketch was compiled
   rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-
-  // Инициализация MPU6050
-  Wire.begin();
-  mpu.initialize();
-
-  Serial.println(F("Testing device connections..."));
-  Serial.println(mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
 
   // Настройка пинов HC-SR04
   pinMode(TRIGGER_PIN, OUTPUT);

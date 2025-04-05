@@ -1,4 +1,4 @@
-#include <SoftWire.h>
+#include <Wire.h>
 #include <RTClib.h>
 #include <Adafruit_SSD1306.h>
 
@@ -6,36 +6,31 @@
 #define SCREEN_HEIGHT 32  // Высота OLED экрана, в пикселях
 #define OLED_RESET    -1
 
-#define RTC_SDA A2  
-#define RTC_SCL A3
-
-SoftWire swire(RTC_SDA, RTC_SCL);
 RTC_DS1307 rtc;
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 char daysOfTheWeek[7][12] = {
-  "Su",
-  "Mo",
-  "Tu",
-  "We",
-  "Th",
-  "Fr",
-  "Sa"
+  "Bc",
+  "Pn",
+  "Bt",
+  "Cp",
+  "Ch",
+  "Pt",
+  "Cb"
 };
 
 void setup () {
   Serial.begin(9600);
 
-  swire.begin();
-  swire.setTimeout(100);
-  // SETUP RTC MODULE
+  Wire.begin();
+
   if (! rtc.begin()) {
     Serial.println("Couldn't find RTC");
     Serial.flush();
     while (1);
   }
 
-  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Адрес 0x3D для некоторых экранов
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println(F("SSD1306 allocation failed"));
     for(;;);
   }
@@ -50,9 +45,6 @@ void setup () {
   // automatically sets the RTC to the date & time on PC this sketch was compiled
   rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
 
-  // manually sets the RTC with an explicit date & time, for example to set
-  // January 21, 2021 at 3am you would call:
-  // rtc.adjust(DateTime(2021, 1, 21, 3, 0, 0));
 }
 
 void loop () {
@@ -69,6 +61,7 @@ void loop () {
   display.print(now.minute(), DEC);
   display.print(':');
   display.print(now.second(), DEC);
+  display.setCursor(104,0);
   display.print('|');
   display.println(daysOfTheWeek[now.dayOfTheWeek()][0]);
   
@@ -76,7 +69,8 @@ void loop () {
   display.print('/');
   display.print(now.month(), DEC);
   display.print('/');
-  display.print(now.year(), DEC);
+  display.print(now.year() % 100, DEC);
+  display.setCursor(104,16);
   display.print('|');
   display.println(daysOfTheWeek[now.dayOfTheWeek()][1]);
 
