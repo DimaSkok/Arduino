@@ -38,8 +38,8 @@ long duration;
 int distance;
 
 // Центр экрана
-const int ORIGIN_X = SCREEN_WIDTH1 / 2 + 30;
-const int ORIGIN_Y = SCREEN_HEIGHT1 / 2 + 15;
+const int ORIGIN_X = 128 / 2 + 30;
+const int ORIGIN_Y = 64 / 2 + 15;
 
 // Размер осей
 const int AXIS_LENGTH = 20; // Длина оси (в пикселях)

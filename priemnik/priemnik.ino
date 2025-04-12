@@ -1,20 +1,19 @@
-#include <RH_ASK.h>
-#include <SPI.h> // Включаем SPI
-
-RH_ASK driver; // Создаем экземпляр класса для ASK модуляции
+#include <Gyver433.h>
+Gyver433_RX<6, 20> rx;  // указали пин и размер буфера
 
 void setup() {
-  Serial.begin(9600);
-  if (!driver.init())
-    Serial.println("init failed");
+  Serial.begin(9600);  
+  attachInterrupt(0, isr, CHANGE);  // прерывание пина радио по CHANGE
+}
+
+// спец. тикер вызывается в прерывании
+void isr() {
+  rx.tickISR();
 }
 
 void loop() {
-  uint8_t buf[RH_ASK_MAX_MESSAGE_LEN]; // Буфер для принятого сообщения
-  uint8_t len = sizeof(buf);
-
-  if (driver.recv(buf, &len)) { // Если пришло сообщение
-    Serial.print("Received: ");
-    Serial.println((char*)buf); // Выводим сообщение в Serial Monitor
+  if (rx.gotData()) {                   // если успешно принято больше 0
+    Serial.write(rx.buffer, rx.size);   // выводим
+    Serial.println();
   }
 }

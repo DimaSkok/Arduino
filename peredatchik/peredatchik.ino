@@ -1,21 +1,14 @@
-#include <RH_ASK.h>
-#include <SPI.h> // Включаем SPI
-
-RH_ASK driver; // Создаем экземпляр класса для ASK модуляции
-
+#include <Gyver433.h>
+Gyver433_TX<6> tx;  // указали пин
 void setup() {
-  Serial.begin(9600);
-  if (!driver.init())
-    Serial.println("init failed");
 }
-
+char data[] = "Hello from #xx"; // строка для отправки
+byte count = 0;                 // счётчик для отправки
 void loop() {
-  const char *msg = "Key0!"; // Сообщение для отправки
-  Serial.print("Sending: ");
-  Serial.println(msg);
-
-  driver.send((uint8_t *)msg, strlen(msg)); // Отправляем сообщение
-  driver.waitPacketSent(); // Ждем окончания передачи
-
-  delay(1000); // Отправляем сообщение каждую секунду
+  // добавляем счётчик в строку
+  data[12] = (count / 10) + '0';
+  data[13] = (count % 10) + '0';
+  if (++count >= 100) count = 0;
+  tx.sendData(data);
+  delay(100);
 }

@@ -1,6 +1,6 @@
 #include <Wire.h>
 #include <U8g2lib.h>
-#include <MPU6050.h> // Облегченная версия
+#include <MPU6050.h>
 #include "RTClib.h"
 #include "Math.h"
 
@@ -20,8 +20,8 @@ RTC_DS1307 rtc;
 int16_t ax, ay, az;
 // Минимальная структура данных
 struct {
-  uint8_t flag : 2;   // 2 бита (0-3)
-  uint8_t step : 1;   // 1 бит  (0-1)
+  uint8_t flag : 2;
+  uint8_t step : 1;
   struct {
     uint8_t dist;
     float grad;
@@ -31,8 +31,78 @@ struct {
 // Дни недели в PROGMEM
 const char days[7][3] PROGMEM = {"Su","Mo","Tu","We","Th","Fr","Sa"};
 
+const uint8_t ORIGIN_X = 128 / 2 + 30;
+const uint8_t ORIGIN_Y = 40;
+
+// Параметры осей
+const uint8_t AXIS_LENGTH = 20;    // Длина оси в пикселях
+
+// Структура для хранения углов
+struct Angles {
+  float roll;
+  float pitch;
+  float yaw;
+};
+
+// Оптимизированная функция преобразования
+inline float gyroToRadians(int16_t gyroRaw) {
+  return gyroRaw * (PI / (180.0f * 131.0f));  // Комбинированные константы
+}
+
+// Оптимизированная функция рисования 3D крестовины
+void draw3DCross(U8G2 &display, const Angles &angles) {
+  // Предварительно вычисляем синусы и косинусы
+  const float cosX = cosf(angles.roll);
+  const float sinX = sinf(angles.roll);
+  const float cosY = cosf(angles.pitch);
+  const float sinY = sinf(angles.pitch);
+  const float cosZ = cosf(angles.yaw);
+  const float sinZ = sinf(angles.yaw);
+
+  // Координаты концов осей (X, Y, Z)
+  const float axisEnds[3][3] = {
+    {AXIS_LENGTH, 0, 0},  // X
+    {0, AXIS_LENGTH, 0},  // Y
+    {0, 0, AXIS_LENGTH}   // Z
+  };
+
+  // Результирующие 2D координаты
+  int16_t x2d[3], y2d[3];
+
+  // Применяем повороты для каждой оси
+  for (uint8_t i = 0; i < 3; i++) {
+    // Поворот Z
+    float x = axisEnds[i][0] * cosZ - axisEnds[i][1] * sinZ;
+    float y = axisEnds[i][0] * sinZ + axisEnds[i][1] * cosZ;
+    float z = axisEnds[i][2];
+
+    // Поворот Y
+    float x2 = x * cosY + z * sinY;
+    z = -x * sinY + z * cosY;
+
+    // Поворот X
+    y = y * cosX - z * sinX;
+
+    // Проекция на 2D (с инверсией Y)
+    x2d[i] = ORIGIN_X + (int16_t)x2;
+    y2d[i] = ORIGIN_Y - (int16_t)y;
+  }
+
+  // Рисуем оси
+  const char axisLabels[3] = {'X', 'Y', 'Z'};
+  
+  display.setDrawColor(1); // Белый цвет
+  for (uint8_t i = 0; i < 3; i++) {
+    display.drawLine(ORIGIN_X, ORIGIN_Y, x2d[i], y2d[i]);
+    
+    // Подписи осей
+    display.setFont(u8g2_font_6x10_tf);
+    display.drawGlyph(x2d[i], y2d[i], axisLabels[i]);
+  }
+}
+
 void setup() {
-  Serial.begin(9600); // Пониженная скорость для стабильности
+  Serial.begin(9600);
   
   // 1. Безопасная инициализация пинов
   pinMode(TRIGGER_PIN, OUTPUT);
@@ -55,14 +125,19 @@ void setup() {
   showStartupScreen();
 
   // 4. Инициализация MPU6050
-  mpu.initialize();
-
+  mpu.initialize(); 
+  Serial.println(mpu.testConnection() ? "MPU6050 OK" : "MPU6050 fail");
 
   // 5. Инициализация RTC
-  if(!rtc.begin()) {
-    // Если RTC не найден, устанавливаем время компиляции
-    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  if (! rtc.begin()) {
+    Serial.println("Couldn't find RTC");
+    Serial.flush();
+    while (1);
   }
+  rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  data.flag = 0;
+  digitalWrite(LAZER_PIN, HIGH);
+  Serial.println("All started");
 }
 
 void loop() {
@@ -80,7 +155,9 @@ void loop() {
 
 void handleButton() {
   if(digitalRead(BUTTON_PIN)) {
-    
+    data.flag += 1;
+    if (data.flag >= 3) {data.flag = 0;};
+
     if(data.flag == 1) { // Измерение
       digitalWrite(LAZER_PIN, HIGH);
       triggerMeasurement();
@@ -92,8 +169,7 @@ void handleButton() {
       data.step += 1;
       if (data.step >= 2) {data.step = 0;};
     }
-    data.flag += 1;
-    if (data.flag >= 3) {data.flag = 0;};
+    
 
   }
 }
@@ -142,6 +218,15 @@ void updateDisplays() {
     int dist = sqrt(data.points[1].dist*data.points[1].dist + data.points[0].dist*data.points[0].dist - 2*data.points[1].dist*data.points[0].dist*cos(data.points[0].grad - data.points[1].grad));
     display1.print(dist); 
     display1.print(F("cm"));
+
+    Angles currentAngles = {
+    gyroToRadians(ax),
+    gyroToRadians(ay),
+    gyroToRadians(az)
+    };
+
+    draw3DCross(display1, currentAngles);
+
   } while(display1.nextPage());
 
   // Дисплей 2 (дата + день недели)
