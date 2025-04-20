@@ -17,7 +17,10 @@
 const uint8_t PIN_SDA = 5;
 const uint8_t PIN_SCL = 6;
 const uint8_t PIN_LASER = 2;
-const uint8_t PIN_BUTTON = 21; // Измените если используете другой пин
+const uint8_t PIN_BUTTON = 21;
+const uint8_t PIN_BUTTON2 = 20;
+const uint8_t ACTIVATE = 10;
+const uint8_t BATTERY_PIN = 0;
 
 // ========== ДИСПЛЕИ ==========
 #define SCREEN1_WIDTH 128
@@ -72,6 +75,8 @@ bool laser_active = false;
 uint8_t chaosPulsePhase = 0;
 uint32_t lastSync = 0;
 uint32_t last_update = 0;
+volatile bool button2Pressed = false;
+volatile unsigned long lastButton2Press = 0;
 
 // ========== КОНСТАНТЫ ==========
 const uint8_t DISPLAY_ORIGIN_X = 128/2 + 30;
@@ -80,28 +85,61 @@ const uint8_t AXIS_LENGTH = 20;
 const uint16_t MEASURE_INTERVAL = 50;
 const char daysOfTheWeek[7][12] = {"Su","Mo","Tu","We","Th","Fr","Sa"};
 const int wifiNetworksCount = sizeof(wifiNetworks) / sizeof(wifiNetworks[0]);
+const float VOLTAGE_FULL = 4.2;
+const float VOLTAGE_EMPTY = 3.0;
 
 // ========== ПРОТОТИПЫ ФУНКЦИЙ ==========
 void IRAM_ATTR buttonISR();
+void IRAM_ATTR button2ISR();
 void drawChaosStar(Adafruit_SSD1306 &display, uint8_t x, uint8_t y, uint8_t size, uint8_t pulsePhase);
 void draw3DAxis(Adafruit_SSD1306 &display, float pitch, float roll, float yaw);
 void handleButtonPress();
+void handleButton2Press();
+void showInitMessage(const String& message, bool clear = true);
 
 void setup() {
   Serial.begin(115200);
 
+  // Инициализация основного дисплея в первую очередь
+  Wire.begin(PIN_SDA, PIN_SCL);
+  if(!display1.begin(SSD1306_SWITCHCAPVCC, SCREEN1_ADDR)) {
+    Serial.println("Display1 не найден!");
+    while(1);
+  }
   
+  showInitMessage("Starting system...");
+  delay(500);
+
   setupPins();
   setupI2C();
+  
+  showInitMessage("Initializing components:");
+  delay(200);
+  
   setupDisplays();
   setupSensors();
   
+  showInitMessage("Connecting to WiFi...");
   wifiState.wifiConnected = connectToWiFi();
   wifiState.useNTP = wifiState.wifiConnected;
 
   if (wifiState.wifiConnected) {
+    showInitMessage("Syncing time...");
     syncTimeWithNTP();
   }
+  
+  // Финальное сообщение
+  display1.clearDisplay();
+  display1.setTextSize(1);
+  display1.setCursor(0,0);
+  display1.println("System initialized");
+  display1.setCursor(0,16);
+  display1.print("WiFi: ");
+  display1.println(wifiState.wifiConnected ? "OK" : "FAIL");
+  display1.setCursor(0,32);
+  display1.println("Ready to work!");
+  display1.display();
+  delay(1000);
   
   Serial.println("Система инициализирована");
 }
@@ -110,8 +148,8 @@ void loop() {
   if (wifiState.wifiConnected && millis() - lastSync >= 3600000) {
     syncTimeWithNTP();
     lastSync = millis();
-  }
-
+  } 
+  
   uint32_t current_time = millis();
   
   if(current_time - last_update < MEASURE_INTERVAL) return;
@@ -122,20 +160,44 @@ void loop() {
     handleButtonPress();
   }
   
+  if (button2Pressed) { 
+    button2Pressed = false;
+    handleButton2Press();
+  }
+  
   readSensors();
   updateDisplays();
 }
 
-// ========== ОБРАБОТЧИК ПРЕРЫВАНИЯ ==========
+// ========== ФУНКЦИЯ ДЛЯ ВЫВОДА СООБЩЕНИЙ ИНИЦИАЛИЗАЦИИ ==========
+void showInitMessage(const String& message, bool clear) {
+  if(clear) display1.clearDisplay();
+  display1.setTextSize(1);
+  display1.setTextColor(WHITE);
+  display1.setCursor(0,0);
+  display1.println(message);
+  display1.display();
+  Serial.println(message);
+}
+
+// ========== ОБРАБОТЧИКИ ПРЕРЫВАНИЙ ==========
 void IRAM_ATTR buttonISR() {
   unsigned long currentTime = millis();
-  if (currentTime - lastButtonPress > 250) { // Антидребезг 250мс
+  if (currentTime - lastButtonPress > 250) {
     buttonPressed = true;
     lastButtonPress = currentTime;
   }
 }
 
-// ========== ОБРАБОТКА НАЖАТИЯ ==========
+void IRAM_ATTR button2ISR() {
+  unsigned long currentTime = millis();
+  if (currentTime - lastButton2Press > 250) {
+    button2Pressed = true;
+    lastButton2Press = currentTime;
+  }
+}
+
+// ========== ОБРАБОТКА НАЖАТИЙ ==========
 void handleButtonPress() {
   operation_mode = (operation_mode + 1) % 3;
   
@@ -154,7 +216,12 @@ void handleButtonPress() {
   }
 }
 
-// ========== ОСТАЛЬНЫЕ ФУНКЦИИ ==========
+void handleButton2Press() {
+  // Здесь можно добавить функционал для второй кнопки
+  Serial.println("Button 2 pressed");
+}
+
+// ========== ОСНОВНЫЕ ФУНКЦИИ ==========
 DateTime getCurrentTime() {
   if (wifiState.useNTP && wifiState.wifiConnected) {
     timeClient.update();
@@ -164,27 +231,37 @@ DateTime getCurrentTime() {
 }
 
 bool connectToWiFi() {
-  if (wifiNetworksCount == 0) return false;
+  if (wifiNetworksCount == 0) {
+    showInitMessage("No WiFi networks", false);
+    return false;
+  }
+  
   for (int i = 0; i < wifiNetworksCount; i++) {
     if (strlen(wifiNetworks[i].ssid) == 0) continue;
-    Serial.printf("Попытка подключения к %s\n", wifiNetworks[i].ssid);
+    
+    display1.print("Trying: ");
+    display1.println(wifiNetworks[i].ssid);
+    display1.display();
+    
     WiFi.begin(wifiNetworks[i].ssid, wifiNetworks[i].password);
     int attempts = 0;
     while (attempts < 20) {
       if (WiFi.status() == WL_CONNECTED) {
-        Serial.printf("Успешно подключено к %s\n", wifiNetworks[i].ssid);
+        showInitMessage("WiFi connected!", false);
         timeClient.begin();
         return true;
       }
       delay(500);
-      Serial.print(".");
+      display1.print(".");
+      display1.display();
       attempts++;
     }
-    Serial.println("\nНе удалось подключиться");
+    showInitMessage("Failed to connect", false);
     WiFi.disconnect();
     delay(1000);
   }
-  Serial.println("Не удалось подключиться ни к одной сети");
+  
+  showInitMessage("All attempts failed", false);
   return false;
 }
 
@@ -192,6 +269,7 @@ void syncTimeWithNTP() {
   if (wifiState.wifiConnected && timeClient.update()) {
     DateTime ntpTime(timeClient.getEpochTime());
     rtc.adjust(ntpTime);
+    showInitMessage("Time synced!", false);
     Serial.println("Time synchronized with NTP");
   }
 }
@@ -199,7 +277,15 @@ void syncTimeWithNTP() {
 void setupPins() {
   pinMode(PIN_LASER, OUTPUT);
   pinMode(PIN_BUTTON, INPUT_PULLUP);
-  digitalWrite(PIN_LASER, HIGH);
+  pinMode(PIN_BUTTON2, INPUT_PULLUP);
+  digitalWrite(PIN_LASER, LOW);
+  analogReadResolution(12);       // Устанавливаем разрешение АЦП (9-12 бит)
+  analogSetAttenuation(ADC_11db); // Установка аттенюатора: 11 dB (макс. ~3.1 В)
+  
+  attachInterrupt(digitalPinToInterrupt(PIN_BUTTON), buttonISR, FALLING);
+  attachInterrupt(digitalPinToInterrupt(PIN_BUTTON2), button2ISR, FALLING);
+  
+  showInitMessage("Pins initialized", false);
 }
 
 void setupI2C() {
@@ -208,13 +294,20 @@ void setupI2C() {
   pinMode(PIN_SDA, INPUT_PULLUP);
   pinMode(PIN_SCL, INPUT_PULLUP);
   delay(100);
+  
+  showInitMessage("I2C initialized", false);
 }
 
 void setupDisplays() {
+  showInitMessage("Init displays...", false);
+  
   if(!display2.begin(SSD1306_SWITCHCAPVCC, SCREEN2_ADDR)) {
+    showInitMessage("Display2: FAIL", false);
     Serial.println("Display2 не найден!");
     while(1);
   }
+  showInitMessage("Display2: OK", false);
+  
   display2.clearDisplay();
   display2.setTextSize(1);
   display2.setTextColor(WHITE);
@@ -223,33 +316,34 @@ void setupDisplays() {
   display2.setCursor(72,24);
   display2.println("from FAKI");
   display2.display();
-
-  if(!display1.begin(SSD1306_SWITCHCAPVCC, SCREEN1_ADDR)) {
-    Serial.println("Display1 не найден!");
-    while(1);
-  }
-  display1.clearDisplay();
-  display1.setTextSize(2);
-  display1.setTextColor(WHITE);
-  display1.setCursor(8,16);
-  display1.println("CH Watch");
-  display1.setCursor(8,32);
-  display1.println("WEll Cum");
-  display1.display();
 }
 
 void setupSensors() {
-  imu.initialize(); 
-  Serial.println(imu.testConnection() ? "MPU6050 OK" : "MPU6050 fail");
+  showInitMessage("Init sensors:", false);
   
+  // MPU6050
+  imu.initialize();
+  bool mpuStatus = imu.testConnection();
+  display1.print("MPU6050: ");
+  display1.println(mpuStatus ? "OK" : "FAIL");
+  display1.display();
+  Serial.println(mpuStatus ? "MPU6050 OK" : "MPU6050 fail");
+  delay(100);
+  
+  // RTC
   if(!rtc.begin()) {
+    showInitMessage("RTC: FAIL", false);
     Serial.println("RTC не инициализирован");
-    for(;;);
+    while(1);
   }
+  showInitMessage("RTC: OK", false);
+  delay(100);
   
+  // VL53L1X
   Wire.beginTransmission(0x29);
   if (Wire.endTransmission() == 0) {
     if (!tofSensor.init()) {
+      showInitMessage("VL53L1X: FAIL", false);
       Serial.println("Ошибка инициализации VL53L1X!");
       while (1);
     }
@@ -257,11 +351,76 @@ void setupSensors() {
     tofSensor.setDistanceMode(VL53L1X::Long);
     tofSensor.setMeasurementTimingBudget(50000);
     tofSensor.startContinuous(50);
+    showInitMessage("VL53L1X: OK", false);
     Serial.println("VL53L1X инициализирован");
+  } else {
+    showInitMessage("VL53L1X: Not found", false);
   }
+  delay(100);
   
   rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-  attachInterrupt(digitalPinToInterrupt(PIN_BUTTON), buttonISR, FALLING);
+}
+
+uint8_t readBatteryPercent() {
+  int adcValue = analogRead(BATTERY_PIN);
+  float voltage = adcValue * (3.3 / 4095.0) * 2.0; // делитель 1:1
+
+  voltage = constrain(voltage, VOLTAGE_EMPTY, VOLTAGE_FULL);
+  float percentFloat = (voltage - VOLTAGE_EMPTY) / (VOLTAGE_FULL - VOLTAGE_EMPTY) * 100.0;
+
+  percentFloat = constrain(percentFloat, 0.0, 100.0);
+  uint8_t percent = (uint8_t)round(percentFloat);
+
+  return percent;
+}
+
+void drawBatteryIndicator(uint8_t percent, Adafruit_SSD1306 &display) {
+  if (percent > 100) percent = 100;
+
+  // Координаты и размеры индикатора
+  int16_t x = SCREEN1_WIDTH - 25;
+  int16_t y = 2;
+  int16_t width = 20;
+  int16_t height = 10;
+  int16_t capWidth = 3;
+  int16_t capHeight = 4;
+
+  // Очищаем область
+  display.fillRect(x - 1, y - 1, width + capWidth + 2, height + 2, SSD1306_BLACK);
+  // Рисуем контур батареи
+  display.drawRect(x, y, width, height, SSD1306_WHITE);
+  // Рисуем "колпачок" батареи
+  display.fillRect(x + width, y + (height - capHeight) / 2, capWidth, capHeight, SSD1306_WHITE);
+
+  // Рассчитываем ширину заполненной части
+  int16_t fillWidth = (width - 2) * percent / 100;
+
+  // Ограничиваем ширину заполнения, чтобы не выходить за границы
+  fillWidth = constrain(fillWidth, 0, width - 2);
+
+  // Определяем стиль отображения в зависимости от уровня заряда
+  bool invert = false;
+
+  if (percent < 20) {
+    // Низкий заряд - мигаем, инвертируя изображение
+    if (millis() % 1000 < 500) {
+      invert = true; // Мигание
+    }
+  }
+
+  // Рисуем уровень заряда (или инвертированное изображение)
+  if (fillWidth > 0) {
+    if (invert) {
+      //Инвертируем только ту область, которую хотим "показать"
+      display.fillRect(x + 1, y + 1, fillWidth, height - 2, SSD1306_BLACK); // Черный прямоугольник (как бы "стираем")
+      display.fillRect(x + 1, y + 1, fillWidth, height - 2, SSD1306_WHITE); //Рисуем рамку "батарейки"
+    } else {
+      display.fillRect(x + 1, y + 1, fillWidth, height - 2, SSD1306_WHITE); //Белый прямоугольник (заполняем батарею)
+    }
+  } else if (percent < 20 && !invert) {
+    //Если аккумулятор почти разряжен и не мигает - показываем хотя бы рамку
+       display.drawRect(x + 1, y + 1, 1, height - 2, SSD1306_WHITE); // рисуем одну полоску, чтобы показать что он вообще есть
+  }
 }
 
 void readSensors() {
@@ -286,6 +445,10 @@ void updateDisplays() {
   
   // Основной дисплей
   display1.clearDisplay();
+
+  uint8_t batPercent = readBatteryPercent();
+  drawBatteryIndicator(batPercent, display1);
+
   display1.setTextSize(1);
   display1.setTextColor(SSD1306_WHITE);
   display1.setCursor(0, 0);
