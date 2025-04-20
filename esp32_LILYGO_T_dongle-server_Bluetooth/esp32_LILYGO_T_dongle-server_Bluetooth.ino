@@ -12,14 +12,11 @@
 #define TFT_SCLK 5
 #define TFT_MOSI 3
 
-#define TFT_WIDTH  80
-#define TFT_HEIGHT 160
-
 #define SERVICE_UUID        "f048d655-5081-4115-9396-2530964dceae"
 #define CHARACTERISTIC_UUID "fe276fbf-dbc8-4d1a-8ec3-083fb4a9e217"
 
+BLECharacteristic *pCharacteristic;
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
-
 bool deviceConnected = false;
 
 class MyServerCallbacks: public BLEServerCallbacks {
@@ -50,12 +47,7 @@ class MyCallbacks: public BLECharacteristicCallbacks {
       if (rxValue.length() > 0) {
         Serial.println("*********");
         Serial.print("Received Value: ");
-
-        for (int i = 0; i < rxValue.length(); i++) {
-          Serial.print(rxValue[i]);
-        }
-        Serial.println();
-        Serial.println("*********");
+        Serial.println(rxValue.c_str());
 
         tft.fillScreen(ST77XX_WHITE);
         tft.setTextColor(ST77XX_BLACK);
@@ -83,20 +75,20 @@ void setup() {
   BLEDevice::init("esp32 Test");
   BLEServer *pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
-  
   BLEService *pService = pServer->createService(SERVICE_UUID);
   
-  // Исправленная строка - правильно создаем характеристику
-  BLECharacteristic *pCharacteristic = pService->createCharacteristic(
-                                         CHARACTERISTIC_UUID,
-                                         BLECharacteristic::PROPERTY_READ |
-                                         BLECharacteristic::PROPERTY_WRITE
-                                       );
+  // Создаем характеристику с нужными свойствами
+  pCharacteristic = pService->createCharacteristic(
+                      CHARACTERISTIC_UUID,
+                      BLECharacteristic::PROPERTY_READ |
+                      BLECharacteristic::PROPERTY_WRITE |
+                      BLECharacteristic::PROPERTY_NOTIFY  // Добавляем поддержку уведомлений
+                    );
   
   pCharacteristic->setCallbacks(new MyCallbacks());
   pService->start();
   
-  // Настройка и запуск рекламы
+  // Настройка рекламы
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(SERVICE_UUID);
   pAdvertising->setScanResponse(true);
@@ -108,5 +100,24 @@ void setup() {
 }
 
 void loop() {
-  delay(1000);
+  if (deviceConnected) {
+    if (Serial.available() > 0) {
+      String message = Serial.readString();
+      message.trim();
+      
+      if (message.length() > 0) {
+        pCharacteristic->setValue(message.c_str());
+        pCharacteristic->notify(); // Теперь это будет работать
+        
+        // Выводим на экран отправленное сообщение
+        tft.fillScreen(ST77XX_WHITE);
+        tft.setTextColor(ST77XX_BLACK);
+        tft.setCursor(8, 20);
+        tft.print("Sent:");
+        tft.setCursor(8, 40);
+        tft.print(message.c_str());
+      }
+    }
+  }
+  delay(100);
 }

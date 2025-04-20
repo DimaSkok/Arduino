@@ -5,6 +5,8 @@
 
 const uint8_t PIN_LED = 2;
 
+int flag = true;
+
 // UUID сервиса и характеристики, к которым нужно подключиться
 static BLEUUID serviceUUID("f048d655-5081-4115-9396-2530964dceae");
 static BLEUUID    charUUID("fe276fbf-dbc8-4d1a-8ec3-083fb4a9e217");
@@ -16,6 +18,7 @@ static boolean doScan = false;
 static BLERemoteCharacteristic* pRemoteCharacteristic;
 static BLERemoteService* pRemoteService;
 static BLEAdvertisedDevice *myDevice;
+static BLECharacteristic *pCharacteristic;
 
 // Колбэк для получения информации об найденных устройствах
 class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
@@ -96,6 +99,7 @@ void setup() {
 
   doScan = true; // Начинаем сканирование
   Serial.println("Starting scan...");
+  
 }
 
 void loop() {
@@ -113,10 +117,32 @@ void loop() {
   if (connected) {
     String newValue = "Time since boot: " + String(millis()/1000);
     Serial.println("Setting new characteristic value to \"" + newValue + "\"");
-    pRemoteCharacteristic->writeValue(newValue.c_str(), newValue.length());
-    digitalWrite(PIN_LED, HIGH);
+    digitalWrite(PIN_LED, flag);
+    if (flag) {
+      pRemoteCharacteristic->writeValue("YES");
+    } else {
+      pRemoteCharacteristic->writeValue("NO");
+    }
+    
+    // Получение данных (исправлено)
+    String rxValue = pRemoteCharacteristic->readValue();
+    if (rxValue.length() > 0) {  // Проверяем, есть ли данные
+      Serial.print("Received raw data: ");
+      for (char c : rxValue) {
+        Serial.printf("%02X ", c);  // Логируем в HEX для отладки
+      }
+      Serial.println();
+
+      if (rxValue == "1") {
+        flag = 1;
+      } else if(rxValue == "0") {
+        flag = 0;
+      }
+    }
+   
+
   } else if (doScan) {
     BLEDevice::getScan()->start(0);  // 0 = don't stop scanning after ...
   }
-  delay(1000); // Добавлена задержка, чтобы не перегружать loop
+  delay(100); // Добавлена задержка, чтобы не перегружать loop
 }
