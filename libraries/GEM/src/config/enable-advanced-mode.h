@@ -1,3 +1,0 @@
-#ifndef GEM_ENABLE_ADVANCED_MODE
-#define GEM_ENABLE_ADVANCED_MODE
-#endif
