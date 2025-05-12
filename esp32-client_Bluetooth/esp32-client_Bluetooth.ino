@@ -2,147 +2,172 @@
 #include <BLEUtils.h>
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
+// Пины
 const uint8_t PIN_LED = 2;
+const uint8_t BOOT = 0;
+const uint8_t PIN_SDA = 6;
+const uint8_t PIN_SCL = 5;
+
+// Настройки дисплея
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define SCREEN_ADDR 0x3C
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire);
 
 int flag = true;
 
-// UUID сервиса и характеристики, к которым нужно подключиться
+// UUID сервиса и характеристики BLE
 static BLEUUID serviceUUID("f048d655-5081-4115-9396-2530964dceae");
-static BLEUUID    charUUID("fe276fbf-dbc8-4d1a-8ec3-083fb4a9e217");
+static BLEUUID charUUID("fe276fbf-dbc8-4d1a-8ec3-083fb4a9e217");
 
-// Глобальные переменные
+// Флаги состояния
 static boolean doConnect = false;
 static boolean connected = false;
 static boolean doScan = false;
 static BLERemoteCharacteristic* pRemoteCharacteristic;
 static BLERemoteService* pRemoteService;
-static BLEAdvertisedDevice *myDevice;
-static BLECharacteristic *pCharacteristic;
+static BLEAdvertisedDevice* myDevice;
 
-// Колбэк для получения информации об найденных устройствах
+// Функция для вывода сообщений на дисплей
+void showInitMessage(const String& message, bool clear) {
+  if (clear) {
+    display.clearDisplay();
+    display.setCursor(0, 0);
+  }
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.println(message);
+  display.display();
+  Serial.println(message);
+}
+
+// Колбэк для обнаружения BLE устройств
 class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
-    void onResult(BLEAdvertisedDevice advertisedDevice) {
-      Serial.print("Advertised Device: ");
-      Serial.println(advertisedDevice.toString().c_str());
+  void onResult(BLEAdvertisedDevice advertisedDevice) {
+    Serial.print("Найдено устройство: ");
+    Serial.println(advertisedDevice.toString().c_str());
 
-      if (advertisedDevice.haveServiceUUID() && advertisedDevice.getServiceUUID().equals(serviceUUID)) {
-        Serial.print("Found Our Service!  address: ");
-        advertisedDevice.getScan()->stop();
-        myDevice = new BLEAdvertisedDevice(advertisedDevice);
-        doConnect = true;
-        doScan = false;
-      }
+    if (advertisedDevice.haveServiceUUID() && advertisedDevice.getServiceUUID().equals(serviceUUID)) {
+      Serial.println("Найден наш сервис!");
+      BLEDevice::getScan()->stop();
+      myDevice = new BLEAdvertisedDevice(advertisedDevice);
+      doConnect = true;
+      doScan = false;
     }
+  }
 };
 
-// Функция для подключения к серверу
+// Функция подключения к BLE серверу
 bool connectToServer() {
-    Serial.print("Forming a connection to: ");
-    Serial.println(myDevice->getAddress().toString().c_str());
+  Serial.print("Подключаемся к ");
+  Serial.println(myDevice->getAddress().toString().c_str());
 
-    BLEClient* pClient = BLEDevice::createClient();
-    Serial.println(" - Connecting to server...");
-    
-    // Подключаемся к серверу
-    if (!pClient->connect(myDevice)) {
-        Serial.println(" - Failed to connect to server");
-        return false;
-    }
-    Serial.println(" - Connected to server");
+  BLEClient* pClient = BLEDevice::createClient();
+  Serial.println(" - Соединяемся с сервером...");
 
-    // Получаем сервис
-    pRemoteService = pClient->getService(serviceUUID);
-    if (pRemoteService == nullptr) {
-        Serial.print("Failed to find our service UUID: ");
-        Serial.println(serviceUUID.toString().c_str());
-        pClient->disconnect();
-        return false;
-    }
-    Serial.println(" - Found our service");
+  // Подключение без таймаута (исправленная версия)
+  if (!pClient->connect(myDevice)) {
+    Serial.println(" - Не удалось подключиться");
+    return false;
+  }
+  Serial.println(" - Подключено");
 
-    // Получаем характеристику
-    pRemoteCharacteristic = pRemoteService->getCharacteristic(charUUID);
-    if (pRemoteCharacteristic == nullptr) {
-        Serial.print("Failed to find our characteristic UUID: ");
-        Serial.println(charUUID.toString().c_str());
-        pClient->disconnect();
-        return false;
-    }
-    Serial.println(" - Found our characteristic");
+  // Получаем сервис
+  pRemoteService = pClient->getService(serviceUUID);
+  if (pRemoteService == nullptr) {
+    Serial.print("Не найден сервис с UUID: ");
+    Serial.println(serviceUUID.toString().c_str());
+    pClient->disconnect();
+    return false;
+  }
+  Serial.println(" - Сервис найден");
 
-    // Читаем значение, если возможно
-    if(pRemoteCharacteristic->canRead()) {
-        String value = pRemoteCharacteristic->readValue();
-        Serial.print("The initial value was: ");
-        Serial.println(value.c_str());
-    }
+  // Получаем характеристику
+  pRemoteCharacteristic = pRemoteService->getCharacteristic(charUUID);
+  if (pRemoteCharacteristic == nullptr) {
+    Serial.print("Не найдена характеристика с UUID: ");
+    Serial.println(charUUID.toString().c_str());
+    pClient->disconnect();
+    return false;
+  }
+  Serial.println(" - Характеристика найдена");
 
-    connected = true;
-    return true;
+  connected = true;
+  return true;
 }
 
 void setup() {
   Serial.begin(115200);
   pinMode(PIN_LED, OUTPUT);
-  digitalWrite(PIN_LED, LOW);
+  pinMode(BOOT, INPUT_PULLUP);
+  digitalWrite(PIN_LED, HIGH);
 
-  BLEDevice::init("ESP32 Client"); // Инициализация BLE
-  Serial.println("BLE Client initialized");
+  // Инициализация дисплея
+  Wire.begin(PIN_SDA, PIN_SCL);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDR)) {
+    Serial.println("Дисплей не найден!");
+    while (1);
+  }
+  showInitMessage("Дисплей инициализирован", true);
 
-  // Создаем сканер
+  // Инициализация BLE
+  BLEDevice::init("ESP32 Client");
+  showInitMessage("BLE клиент запущен", true);
+
+  // Настройка сканирования BLE
   BLEScan* pScan = BLEDevice::getScan();
   pScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
-  pScan->setActiveScan(true); // Set active scanning for more detail
+  pScan->setActiveScan(true);
   pScan->setInterval(100);
   pScan->setWindow(99);
 
-  doScan = true; // Начинаем сканирование
-  Serial.println("Starting scan...");
-  
+  doScan = true;
+  showInitMessage("Сканирование...", true);
 }
 
 void loop() {
-
-  if (doConnect == true) {
+  if (doConnect) {
     if (connectToServer()) {
-      Serial.println("We are now connected to the BLE Server.");
+      showInitMessage("Подключено к BLE серверу", true);
     } else {
-      Serial.println("Failed to connect to the server; Restart scanning");
+      showInitMessage("Ошибка подключения", true);
       doScan = true;
     }
     doConnect = false;
   }
 
   if (connected) {
-    String newValue = "Time since boot: " + String(millis()/1000);
-    Serial.println("Setting new characteristic value to \"" + newValue + "\"");
+    // Управляем светодиодом и отправляем значение
     digitalWrite(PIN_LED, flag);
     if (flag) {
       pRemoteCharacteristic->writeValue("YES");
     } else {
       pRemoteCharacteristic->writeValue("NO");
     }
-    
-    // Получение данных (исправлено)
-    String rxValue = pRemoteCharacteristic->readValue();
-    if (rxValue.length() > 0) {  // Проверяем, есть ли данные
-      Serial.print("Received raw data: ");
-      for (char c : rxValue) {
-        Serial.printf("%02X ", c);  // Логируем в HEX для отладки
-      }
-      Serial.println();
 
+    // Читаем значение
+    String rxValue = pRemoteCharacteristic->readValue();
+    if (rxValue.length() > 0) {
+      Serial.print("Получено: ");
+      Serial.println(rxValue.c_str());
+      
       if (rxValue == "1") {
-        flag = 1;
-      } else if(rxValue == "0") {
         flag = 0;
+      } else if (rxValue == "0") {
+        flag = 1;
       }
     }
-   
-
+    
+    delay(100);  // Пауза для предотвращения срабатывания watchdog
   } else if (doScan) {
-    BLEDevice::getScan()->start(0);  // 0 = don't stop scanning after ...
+    // Сканируем с ограничением по времени (исправленная версия)
+    BLEDevice::getScan()->start(2, false);
+    Serial.println("Сканируем...");
+    delay(100);  // Небольшая пауза между сканированиями
   }
-  delay(100); // Добавлена задержка, чтобы не перегружать loop
+
+  delay(10);  // Основная задержка в цикле
 }

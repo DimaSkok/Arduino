@@ -5,6 +5,13 @@
 #include <BLEUtils.h>
 #include <BLEServer.h>
 
+const uint8_t BOOT = 0;
+
+int lastButtonState = HIGH;
+int buttonState = HIGH;
+bool flag = false;
+
+
 // ----- TFT Display -----
 #define TFT_CS   4
 #define TFT_RST  1
@@ -60,6 +67,8 @@ class MyCallbacks: public BLECharacteristicCallbacks {
 void setup() {
   Serial.begin(115200);
 
+  pinMode(BOOT, INPUT_PULLUP);
+
   // TFT Initialization
   tft.initR(INITR_BLACKTAB);
   tft.setRotation(1);
@@ -99,25 +108,46 @@ void setup() {
   tft.print("Server start!");
 }
 
+String message = "1";
+
 void loop() {
+  static unsigned long lastDebounceTime = 0;
+  const unsigned long debounceDelay = 50;
+  
   if (deviceConnected) {
-    if (Serial.available() > 0) {
-      String message = Serial.readString();
-      message.trim();
-      
-      if (message.length() > 0) {
-        pCharacteristic->setValue(message.c_str());
-        pCharacteristic->notify(); // Теперь это будет работать
+    int reading = digitalRead(BOOT);
+    
+    // Антидребезг
+    if (reading != lastButtonState) {
+      lastDebounceTime = millis();
+    }
+    
+    if ((millis() - lastDebounceTime) > debounceDelay) {
+      if (reading != buttonState) {
+        buttonState = reading;
         
-        // Выводим на экран отправленное сообщение
-        tft.fillScreen(ST77XX_WHITE);
-        tft.setTextColor(ST77XX_BLACK);
-        tft.setCursor(8, 20);
-        tft.print("Sent:");
-        tft.setCursor(8, 40);
-        tft.print(message.c_str());
+        // Только при нажатии кнопки (LOW, если подключена с подтяжкой к +)
+        if (buttonState == LOW) {
+          String message = flag ? "1" : "0";
+          flag = !flag; // Инвертируем флаг
+          
+          message.trim();
+          if (message.length() > 0) {
+            pCharacteristic->setValue(message.c_str());
+            pCharacteristic->notify();
+            
+            // Выводим на экран отправленное сообщение
+            tft.fillScreen(ST77XX_WHITE);
+            tft.setTextColor(ST77XX_BLACK);
+            tft.setCursor(8, 20);
+            tft.print("Sent:");
+            tft.setCursor(8, 40);
+            tft.print(message.c_str());
+          }
+        }
       }
     }
+    lastButtonState = reading;
   }
-  delay(100);
+  delay(10);
 }
