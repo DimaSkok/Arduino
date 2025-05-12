@@ -14,8 +14,8 @@
 #define CHAOS_STAR_SIZE   20
 
 // ========== ПИНЫ ==========
-const uint8_t PIN_SDA = 5;
-const uint8_t PIN_SCL = 6;
+const uint8_t PIN_SDA = 6;
+const uint8_t PIN_SCL = 5;
 const uint8_t PIN_LASER = 2;
 const uint8_t PIN_BUTTON = 21;
 const uint8_t PIN_BUTTON2 = 20;
@@ -77,6 +77,11 @@ uint32_t lastSync = 0;
 uint32_t last_update = 0;
 volatile bool button2Pressed = false;
 volatile unsigned long lastButton2Press = 0;
+uint8_t display_mode = 1;
+bool stopwatch_running = false;
+unsigned long stopwatch_start = 0;
+unsigned long stopwatch_time = 0;
+bool sleep_mode = false;
 
 // ========== КОНСТАНТЫ ==========
 const uint8_t DISPLAY_ORIGIN_X = 128/2 + 30;
@@ -91,7 +96,7 @@ const float VOLTAGE_EMPTY = 3.0;
 // ========== ПРОТОТИПЫ ФУНКЦИЙ ==========
 void IRAM_ATTR buttonISR();
 void IRAM_ATTR button2ISR();
-void drawChaosStar(Adafruit_SSD1306 &display, uint8_t x, uint8_t y, uint8_t size, uint8_t pulsePhase);
+void drawChaosStar(Adafruit_SSD1306 &display, uint8_t x, uint8_t y, uint8_t size, uint8_t pulsePhase, float dark = 0.5);
 void draw3DAxis(Adafruit_SSD1306 &display, float pitch, float roll, float yaw);
 void handleButtonPress();
 void handleButton2Press();
@@ -100,7 +105,6 @@ void showInitMessage(const String& message, bool clear = true);
 void setup() {
   Serial.begin(115200);
 
-  // Инициализация основного дисплея в первую очередь
   Wire.begin(PIN_SDA, PIN_SCL);
   if(!display1.begin(SSD1306_SWITCHCAPVCC, SCREEN1_ADDR)) {
     Serial.println("Display1 не найден!");
@@ -108,13 +112,13 @@ void setup() {
   }
   
   showInitMessage("Starting system...");
-  delay(500);
+  delay(1000);
 
   setupPins();
   setupI2C();
   
   showInitMessage("Initializing components:");
-  delay(200);
+  delay(1000);
   
   setupDisplays();
   setupSensors();
@@ -128,7 +132,6 @@ void setup() {
     syncTimeWithNTP();
   }
   
-  // Финальное сообщение
   display1.clearDisplay();
   display1.setTextSize(1);
   display1.setCursor(0,0);
@@ -165,13 +168,15 @@ void loop() {
     handleButton2Press();
   }
   
+  if (sleep_mode) return;
+  
   readSensors();
   updateDisplays();
 }
 
 // ========== ФУНКЦИЯ ДЛЯ ВЫВОДА СООБЩЕНИЙ ИНИЦИАЛИЗАЦИИ ==========
 void showInitMessage(const String& message, bool clear) {
-  if(clear) display1.clearDisplay();
+  display1.clearDisplay();
   display1.setTextSize(1);
   display1.setTextColor(WHITE);
   display1.setCursor(0,0);
@@ -183,7 +188,7 @@ void showInitMessage(const String& message, bool clear) {
 // ========== ОБРАБОТЧИКИ ПРЕРЫВАНИЙ ==========
 void IRAM_ATTR buttonISR() {
   unsigned long currentTime = millis();
-  if (currentTime - lastButtonPress > 250) {
+  if (currentTime - lastButtonPress > 100) {
     buttonPressed = true;
     lastButtonPress = currentTime;
   }
@@ -191,7 +196,7 @@ void IRAM_ATTR buttonISR() {
 
 void IRAM_ATTR button2ISR() {
   unsigned long currentTime = millis();
-  if (currentTime - lastButton2Press > 250) {
+  if (currentTime - lastButton2Press > 100) {
     button2Pressed = true;
     lastButton2Press = currentTime;
   }
@@ -199,26 +204,63 @@ void IRAM_ATTR button2ISR() {
 
 // ========== ОБРАБОТКА НАЖАТИЙ ==========
 void handleButtonPress() {
-  operation_mode = (operation_mode + 1) % 3;
+  if (sleep_mode) {
+    sleep_mode = false;
+    digitalWrite(ACTIVATE, LOW);
+    display1.begin(SSD1306_SWITCHCAPVCC, SCREEN1_ADDR);
+    display2.begin(SSD1306_SWITCHCAPVCC, SCREEN2_ADDR);
+    return;
+  }
   
-  switch(operation_mode) {
-    case 1:
-      laser_active = true;
-      digitalWrite(PIN_LASER, HIGH);
-      takeMeasurement();
-      break;
-      
-    case 2:
-      laser_active = false;
-      digitalWrite(PIN_LASER, LOW);
-      current_point = (current_point + 1) % 2;
-      break;
+  if (display_mode == 1) {
+    operation_mode = (operation_mode + 1) % 3;
+    switch(operation_mode) {
+      case 1:
+        laser_active = true;
+        digitalWrite(PIN_LASER, HIGH);
+        takeMeasurement();
+        break;
+      case 2:
+        laser_active = false;
+        digitalWrite(PIN_LASER, LOW);
+        current_point = (current_point + 1) % 2;
+        break;
+    }
+  } else if (display_mode == 2) {
+    stopwatch_running = !stopwatch_running;
+    if (stopwatch_running) {
+      stopwatch_start = millis() - stopwatch_time;
+    }
   }
 }
 
 void handleButton2Press() {
-  // Здесь можно добавить функционал для второй кнопки
-  Serial.println("Button 2 pressed");
+  display_mode = (display_mode % 5) + 1; // Cycle through modes 1-5
+  if (sleep_mode) {
+    sleep_mode = false;
+    digitalWrite(ACTIVATE, LOW);
+    display1.begin(SSD1306_SWITCHCAPVCC, SCREEN1_ADDR);
+    display2.begin(SSD1306_SWITCHCAPVCC, SCREEN2_ADDR);
+    return;
+  }
+  if (display_mode == 4) {
+    sleep_mode = true;
+    laser_active = false;
+    digitalWrite(PIN_LASER, LOW);
+    digitalWrite(ACTIVATE, HIGH);
+    display1.clearDisplay();
+    display2.clearDisplay();
+    display1.display();
+    display2.display();
+  } else {
+    sleep_mode = false;
+    stopwatch_running = false;
+    stopwatch_time = 0;
+    laser_active = false;
+    digitalWrite(PIN_LASER, LOW);
+  }
+  Serial.print("Switch to mode: ");
+  Serial.println(display_mode);
 }
 
 // ========== ОСНОВНЫЕ ФУНКЦИИ ==========
@@ -242,7 +284,7 @@ bool connectToWiFi() {
     display1.print("Trying: ");
     display1.println(wifiNetworks[i].ssid);
     display1.display();
-    
+    WiFi.mode(WIFI_STA);
     WiFi.begin(wifiNetworks[i].ssid, wifiNetworks[i].password);
     int attempts = 0;
     while (attempts < 20) {
@@ -276,11 +318,13 @@ void syncTimeWithNTP() {
 
 void setupPins() {
   pinMode(PIN_LASER, OUTPUT);
+  pinMode(ACTIVATE, OUTPUT);
+  digitalWrite(ACTIVATE, LOW);
   pinMode(PIN_BUTTON, INPUT_PULLUP);
   pinMode(PIN_BUTTON2, INPUT_PULLUP);
   digitalWrite(PIN_LASER, LOW);
-  analogReadResolution(12);       // Устанавливаем разрешение АЦП (9-12 бит)
-  analogSetAttenuation(ADC_11db); // Установка аттенюатора: 11 dB (макс. ~3.1 В)
+  analogReadResolution(12);
+  analogSetAttenuation(ADC_11db);
   
   attachInterrupt(digitalPinToInterrupt(PIN_BUTTON), buttonISR, FALLING);
   attachInterrupt(digitalPinToInterrupt(PIN_BUTTON2), button2ISR, FALLING);
@@ -321,16 +365,14 @@ void setupDisplays() {
 void setupSensors() {
   showInitMessage("Init sensors:", false);
   
-  // MPU6050
   imu.initialize();
   bool mpuStatus = imu.testConnection();
   display1.print("MPU6050: ");
   display1.println(mpuStatus ? "OK" : "FAIL");
   display1.display();
   Serial.println(mpuStatus ? "MPU6050 OK" : "MPU6050 fail");
-  delay(100);
+  delay(1000);
   
-  // RTC
   if(!rtc.begin()) {
     showInitMessage("RTC: FAIL", false);
     Serial.println("RTC не инициализирован");
@@ -339,7 +381,6 @@ void setupSensors() {
   showInitMessage("RTC: OK", false);
   delay(100);
   
-  // VL53L1X
   Wire.beginTransmission(0x29);
   if (Wire.endTransmission() == 0) {
     if (!tofSensor.init()) {
@@ -356,70 +397,49 @@ void setupSensors() {
   } else {
     showInitMessage("VL53L1X: Not found", false);
   }
-  delay(100);
+  delay(1000);
   
   rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
 }
 
 uint8_t readBatteryPercent() {
   int adcValue = analogRead(BATTERY_PIN);
-  float voltage = adcValue * (3.3 / 4095.0) * 2.0; // делитель 1:1
-
+  float voltage = adcValue * (3.3 / 4095.0) * 2.0;
   voltage = constrain(voltage, VOLTAGE_EMPTY, VOLTAGE_FULL);
   float percentFloat = (voltage - VOLTAGE_EMPTY) / (VOLTAGE_FULL - VOLTAGE_EMPTY) * 100.0;
-
   percentFloat = constrain(percentFloat, 0.0, 100.0);
   uint8_t percent = (uint8_t)round(percentFloat);
-
   return percent;
 }
 
 void drawBatteryIndicator(uint8_t percent, Adafruit_SSD1306 &display) {
-  if (percent > 100) percent = 100;
-
-  // Координаты и размеры индикатора
+  if (percent > 100)  percent = 100;
   int16_t x = SCREEN1_WIDTH - 25;
-  int16_t y = 2;
+  int16_t y = SCREEN1_HEIGHT - 10;
   int16_t width = 20;
   int16_t height = 10;
   int16_t capWidth = 3;
   int16_t capHeight = 4;
-
-  // Очищаем область
   display.fillRect(x - 1, y - 1, width + capWidth + 2, height + 2, SSD1306_BLACK);
-  // Рисуем контур батареи
   display.drawRect(x, y, width, height, SSD1306_WHITE);
-  // Рисуем "колпачок" батареи
   display.fillRect(x + width, y + (height - capHeight) / 2, capWidth, capHeight, SSD1306_WHITE);
-
-  // Рассчитываем ширину заполненной части
   int16_t fillWidth = (width - 2) * percent / 100;
-
-  // Ограничиваем ширину заполнения, чтобы не выходить за границы
   fillWidth = constrain(fillWidth, 0, width - 2);
-
-  // Определяем стиль отображения в зависимости от уровня заряда
   bool invert = false;
-
   if (percent < 20) {
-    // Низкий заряд - мигаем, инвертируя изображение
     if (millis() % 1000 < 500) {
-      invert = true; // Мигание
+      invert = true;
     }
   }
-
-  // Рисуем уровень заряда (или инвертированное изображение)
   if (fillWidth > 0) {
     if (invert) {
-      //Инвертируем только ту область, которую хотим "показать"
-      display.fillRect(x + 1, y + 1, fillWidth, height - 2, SSD1306_BLACK); // Черный прямоугольник (как бы "стираем")
-      display.fillRect(x + 1, y + 1, fillWidth, height - 2, SSD1306_WHITE); //Рисуем рамку "батарейки"
+      display.fillRect(x + 1, y + 1, fillWidth, height - 2, SSD1306_BLACK);
+      display.fillRect(x + 1, y + 1, fillWidth, height - 2, SSD1306_WHITE);
     } else {
-      display.fillRect(x + 1, y + 1, fillWidth, height - 2, SSD1306_WHITE); //Белый прямоугольник (заполняем батарею)
+      display.fillRect(x + 1, y + 1, fillWidth, height - 2, SSD1306_WHITE);
     }
   } else if (percent < 20 && !invert) {
-    //Если аккумулятор почти разряжен и не мигает - показываем хотя бы рамку
-       display.drawRect(x + 1, y + 1, 1, height - 2, SSD1306_WHITE); // рисуем одну полоску, чтобы показать что он вообще есть
+    display.drawRect(x + 1, y + 1, 1, height - 2, SSD1306_WHITE);
   }
 }
 
@@ -441,60 +461,114 @@ void takeMeasurement() {
 }
 
 void updateDisplays() {
-  DateTime now = rtc.now();
+  readSensors();
+  display1.setRotation(0);
+  display1.setTextSize(1);
+  DateTime now = getCurrentTime();
   
-  // Основной дисплей
   display1.clearDisplay();
-
   uint8_t batPercent = readBatteryPercent();
   drawBatteryIndicator(batPercent, display1);
-
+  
   display1.setTextSize(1);
   display1.setTextColor(SSD1306_WHITE);
   display1.setCursor(0, 0);
-  display1.print("P1:");
-  display1.print(measurements[0].distance);
-  display1.print("cm P2:");
-  display1.print(measurements[1].distance);
-  display1.println("cm");
   
-  uint16_t dist = sqrt(measurements[1].distance*measurements[1].distance + measurements[0].distance*measurements[0].distance - 2*measurements[1].distance*measurements[0].distance*cos(measurements[1].angle - measurements[0].angle));
-  display1.print("Distance: ");
-  display1.print(dist);
-  display1.println("cm");
-
-  draw3DAxis(display1, 
-    atan2(acceleration.y, acceleration.z),
-    atan2(-acceleration.x, sqrt(acceleration.y*acceleration.y + acceleration.z*acceleration.z)),
-    0);
-
-  chaosPulsePhase++;
-  drawChaosStar(display1, CHAOS_STAR_X, CHAOS_STAR_Y, CHAOS_STAR_SIZE, chaosPulsePhase, 0.5);
-  display1.display();
-
-  // Второй дисплей
-  display2.clearDisplay();
-  display2.setTextSize(2);
-  display2.setTextColor(WHITE);
-  display2.setCursor(0,0);
-  display2.print(now.hour(), DEC);
-  display2.print(':');
-  display2.print(now.minute(), DEC);
-  display2.print(':');
-  display2.print(now.second(), DEC);
-  display2.setCursor(104,0);
-  display2.print('|');
-  display2.println(daysOfTheWeek[now.dayOfTheWeek()][0]);
+  if (display_mode == 1) {
+    display1.print("P1:");
+    display1.print(measurements[0].distance);
+    display1.print("cm P2:");
+    display1.print(measurements[1].distance);
+    display1.println("cm");
+    uint16_t dist = sqrt(measurements[1].distance*measurements[1].distance + measurements[0].distance*measurements[0].distance - 2*measurements[1].distance*measurements[0].distance*cos(measurements[1].angle - measurements[0].angle));
+    display1.print("Distance: ");
+    display1.print(dist);
+    display1.println("cm");
+    draw3DAxis(display1, 
+      atan2(acceleration.y, acceleration.z),
+      atan2(-acceleration.x, sqrt(acceleration.y*acceleration.y + acceleration.z*acceleration.z)),
+      0);
+  } else if (display_mode == 2) {
+    if (stopwatch_running) {
+      stopwatch_time = millis() - stopwatch_start;
+    }
+    uint32_t ms = stopwatch_time % 1000;
+    uint32_t seconds = (stopwatch_time / 1000) % 60;
+    uint32_t minutes = (stopwatch_time / 60000);
+    display1.print("Stopwatch: ");
+    display1.printf("%02d:%02d.%03d", minutes, seconds, ms);
+    display1.println();
+    display1.print("Mode: Stopwatch");
+  } else if (display_mode == 3) {
+    display1.clearDisplay();
+    display1.setRotation(3);
+    display1.setTextSize(3);
+    display1.setCursor(14, 2);
+    
+    if (now.hour() < 10) display1.print('0');
+    display1.print(now.hour(), DEC);
+    display1.setCursor(14, 26);
+    display1.print("--");
+    display1.setCursor(14, 50);
+    if (now.minute() < 10) display1.print('0');
+    display1.print(now.minute(), DEC);
+    display1.setCursor(14, 74);
+    display1.print("--");
+    display1.setCursor(14, 98);
+    if (now.second() < 10) display1.print('0');
+    display1.print(now.second(), DEC);
+    
+    display2.clearDisplay();
+    display1.display();
+    display2.display();
+  } else if (display_mode == 4) {
+    display1.print("Mode: Sleep");
+  } else if (display_mode == 5) { // Углы гироскопа
+    display1.print("Pitch: ");
+    display1.print(atan2(acceleration.y, acceleration.z)*60);
+    display1.println(" deg");
+    display1.print("Roll:  ");
+    display1.print(atan2(-acceleration.x, sqrt(acceleration.y*acceleration.y + acceleration.z*acceleration.z))*60);
+    display1.println(" deg");
+    draw3DAxis(display1, 
+      atan2(acceleration.y, acceleration.z),
+      atan2(-acceleration.x, sqrt(acceleration.y*acceleration.y + acceleration.z*acceleration.z)),
+      0);
+  }
   
-  display2.print(now.day(), DEC);
-  display2.print('/');
-  display2.print(now.month(), DEC);
-  display2.print('/');
-  display2.print(now.year() % 100, DEC);
-  display2.setCursor(104,16);
-  display2.print('|');
-  display2.println(daysOfTheWeek[now.dayOfTheWeek()][1]);
-  display2.display();
+  if (display_mode != 3) {
+    chaosPulsePhase++;
+    drawChaosStar(display1, CHAOS_STAR_X, CHAOS_STAR_Y, CHAOS_STAR_SIZE, chaosPulsePhase);
+    display1.display();
+    
+    display2.clearDisplay();
+    display2.setTextSize(2);
+    display2.setTextColor(WHITE);
+    display2.setCursor(0,0);
+    if (now.hour() < 10) display2.print('0');
+    display2.print(now.hour(), DEC);
+    display2.print(':');
+    if (now.minute() < 10) display2.print('0');
+    display2.print(now.minute(), DEC);
+    display2.print(':');
+    if (now.second() < 10) display2.print('0');
+    display2.print(now.second(), DEC);
+    display2.setCursor(104,0);
+    display2.print('|');
+    display2.println(daysOfTheWeek[now.dayOfTheWeek()][0]);
+    if (now.day() < 10) display2.print('0');
+    display2.print(now.day(), DEC);
+    display2.print('/');
+    if (now.month() < 10) display2.print('0');
+    display2.print(now.month(), DEC);
+    display2.print('/');
+    if ((now.year() % 100) < 10) display2.print('0');
+    display2.print(now.year() % 100, DEC);
+    display2.setCursor(104,16);
+    display2.print('|');
+    display2.println(daysOfTheWeek[now.dayOfTheWeek()][1]);
+    display2.display();
+  }
 }
 
 void draw3DAxis(Adafruit_SSD1306 &display, float pitch, float roll, float yaw) {
@@ -533,7 +607,6 @@ void draw3DAxis(Adafruit_SSD1306 &display, float pitch, float roll, float yaw) {
 void drawChaosStar(Adafruit_SSD1306 &display, uint8_t x, uint8_t y, uint8_t size, uint8_t pulsePhase, float dark) {
   uint8_t pulseOffset = (sin(pulsePhase * 0.1) * 2);
   size += pulseOffset;
-  
   for (int i = 0; i < 8; i++) {
     float angle = i * PI / 4;
     for (int j = -1; j <= 1; j++) {
